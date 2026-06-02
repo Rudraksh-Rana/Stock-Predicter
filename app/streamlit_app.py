@@ -1,0 +1,314 @@
+import logging
+from datetime import datetime, timedelta
+
+import streamlit as st
+import httpx
+import pandas as pd
+import plotly.graph_objects as go
+
+# Configure page
+st.set_page_config(
+    page_title="LSTM Stock Price Predictor",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# API configuration
+API_URL = "http://localhost:8000"
+
+st.title("📈 LSTM Stock Price Predictor")
+st.markdown("---")
+
+# Sidebar configuration
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    ticker = st.text_input("Stock Ticker", value="AAPL", placeholder="e.g., AAPL, MSFT, GOOGL").upper()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=365))
+    with col2:
+        end_date = st.date_input("End Date", value=datetime.now())
+    
+    predict_button = st.button("🔮 Run Prediction", use_container_width=True)
+
+# Main area
+if predict_button or True:  # Always show if page loads
+    try:
+        # Fetch prediction
+        with st.spinner("📡 Fetching prediction from API..."):
+            try:
+                response = httpx.post(
+                    f"{API_URL}/predict",
+                    params={"ticker": ticker, "days_ahead": 1},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                pred_data = response.json()
+            except httpx.ConnectError:
+                st.error("❌ Cannot connect to API. Make sure the API server is running on http://localhost:8000")
+                st.info("Start the API with: `uvicorn api.main:app --reload`")
+                st.stop()
+            except httpx.HTTPStatusError as e:
+                st.error(f"❌ API Error: {e.response.status_code} - {e.response.text}")
+                st.stop()
+        
+        # Calculate buy/sell recommendation and profit/loss
+        current_price = pred_data['last_actual_close']
+        predicted_price = pred_data['predicted_close']
+        price_change = predicted_price - current_price
+        pnl_percentage = (price_change / current_price) * 100
+        
+        # Generate recommendation
+        if pred_data['direction'].upper() == 'UP' and pnl_percentage > 0:
+            recommendation = "BUY"
+            rec_color = "green"
+        else:
+            recommendation = "SELL"
+            rec_color = "red"
+        
+        # Display metric cards
+        st.markdown("### 📊 Key Metrics")
+        cols = st.columns(5)
+        
+        with cols[0]:
+            st.metric(
+                "Last Close",
+                f"${current_price:.2f}",
+                delta=None
+            )
+        
+        with cols[1]:
+            st.metric(
+                "Predicted Close",
+                f"${predicted_price:.2f}",
+                delta=f"${price_change:.2f}",
+                delta_color="inverse"
+            )
+        
+        with cols[2]:
+            st.metric(
+                "Direction",
+                pred_data['direction'].upper(),
+                delta=None
+            )
+        
+        with cols[3]:
+            ci_lower, ci_upper = pred_data['confidence_interval']
+            ci_range = ci_upper - ci_lower
+            st.metric(
+                "Confidence Interval",
+                f"±${ci_range/2:.2f}",
+                delta=None
+            )
+        
+        with cols[4]:
+            st.metric(
+                "P&L %",
+                f"{pnl_percentage:.2f}%",
+                delta=None
+            )
+        
+        st.markdown("---")
+        
+        # Display recommendation box
+        st.markdown("### 🎯 Trading Recommendation")
+        
+        if recommendation == "BUY":
+            st.success(f"""
+            ### ✅ BUY RECOMMENDATION
+            **Expected Return:** {pnl_percentage:.2f}%
+            **Profit Per Share:** ${price_change:.2f}
+            **Entry Price:** ${current_price:.2f}
+            **Target Price:** ${predicted_price:.2f}
+            
+            The model predicts the price will go UP. Based on the prediction, buying at current price 
+            and selling at predicted price could yield a profit of ${price_change:.2f} per share ({pnl_percentage:.2f}%).
+            """)
+        else:
+            st.error(f"""
+            ### ❌ SELL RECOMMENDATION
+            **Expected Loss:** {pnl_percentage:.2f}%
+            **Loss Per Share:** ${price_change:.2f}
+            **Entry Price:** ${current_price:.2f}
+            **Target Price:** ${predicted_price:.2f}
+            
+            The model predicts the price will go DOWN. The predicted price is lower than current price.
+            Holding or buying at this point may result in a loss of ${abs(price_change):.2f} per share ({abs(pnl_percentage):.2f}%).
+            Consider selling or holding off buying.
+            """)
+        
+        st.markdown("---")
+        
+        # Display confidence interval details
+        st.markdown("### 🎯 Prediction Details")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"**Ticker:** {pred_data['ticker']}")
+            st.write(f"**Generated At:** {pred_data['generated_at']}")
+        
+        with col2:
+            ci_lower, ci_upper = pred_data['confidence_interval']
+            st.write(f"**CI Lower:** ${ci_lower:.2f}")
+            st.write(f"**CI Upper:** ${ci_upper:.2f}")
+        
+        st.markdown("---")
+        
+        # Fetch historical data
+        st.markdown("### 📈 Historical Data & Predictions")
+        
+        with st.spinner("📡 Fetching historical data..."):
+            try:
+                response = httpx.get(
+                    f"{API_URL}/history/{ticker}",
+                    params={"lookback_days": 30},
+                    timeout=30.0
+                )
+                response.raise_for_status()
+                hist_data = response.json()
+                
+                # Create DataFrame
+                df_hist = pd.DataFrame({
+                    'Date': hist_data['dates'],
+                    'Actual': hist_data['actual'],
+                    'Predicted': hist_data['predictions']
+                })
+                
+                # Create Plotly chart
+                fig = go.Figure()
+                
+                fig.add_trace(go.Scatter(
+                    x=df_hist['Date'],
+                    y=df_hist['Actual'],
+                    mode='lines',
+                    name='Actual Price',
+                    line=dict(color='#1f77b4', width=2)
+                ))
+                
+                fig.add_trace(go.Scatter(
+                    x=df_hist['Date'],
+                    y=df_hist['Predicted'],
+                    mode='lines',
+                    name='Predicted Price',
+                    line=dict(color='#ff7f0e', width=2, dash='dash')
+                ))
+                
+                fig.update_layout(
+                    title=f"{ticker} - 30 Day Historical Performance",
+                    xaxis_title="Date",
+                    yaxis_title="Price ($)",
+                    hovermode='x unified',
+                    height=500,
+                    template='plotly_dark'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Display historical data in table format
+                st.markdown("#### 📋 Historical Data Table")
+                st.dataframe(
+                    df_hist.assign(
+                        Actual=df_hist['Actual'].apply(lambda x: f"${x:.2f}"),
+                        Predicted=df_hist['Predicted'].apply(lambda x: f"${x:.2f}")
+                    ),
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+            except Exception as e:
+                st.warning(f"⚠️ Could not fetch historical data: {e}")
+        
+        st.markdown("---")
+        
+        # Display prediction summary table
+        st.markdown("### 💹 Prediction Summary Table")
+        pred_summary = pd.DataFrame({
+            'Metric': [
+                'Current Close Price',
+                'Predicted Close Price',
+                'Price Change',
+                'Direction',
+                'Expected P&L (Per Share)',
+                'Expected P&L (%)',
+                'Recommendation',
+                'Confidence Interval Lower',
+                'Confidence Interval Upper',
+                'Confidence Range',
+                'Last Update'
+            ],
+            'Value': [
+                f"${current_price:.2f}",
+                f"${predicted_price:.2f}",
+                f"${price_change:.2f}",
+                pred_data['direction'].upper(),
+                f"${price_change:.2f}",
+                f"{pnl_percentage:.2f}%",
+                recommendation,
+                f"${pred_data['confidence_interval'][0]:.2f}",
+                f"${pred_data['confidence_interval'][1]:.2f}",
+                f"${pred_data['confidence_interval'][1] - pred_data['confidence_interval'][0]:.2f}",
+                pred_data['last_update']
+            ]
+        })
+        st.dataframe(pred_summary, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        
+        # Model details expander
+        with st.expander("ℹ️ Model Details"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Features:**")
+                features_text = """
+                - Close Price
+                - Volume
+                - RSI (14)
+                - MACD (12, 26, 9)
+                - MACD Histogram
+                - Bollinger Bands (20, 2.0)
+                - SMA (20, 50)
+                - EMA (12)
+                """
+                st.markdown(features_text)
+            
+            with col2:
+                st.markdown("**Architecture:**")
+                arch_text = """
+                - LSTM Layer 1: 128 units
+                - LSTM Layer 2: 64 units
+                - Dropout: 0.2
+                - Output: Dense(1)
+                - Loss: MSE
+                - Optimizer: Adam (lr=0.001)
+                """
+                st.markdown(arch_text)
+            
+            st.markdown("**Training Config:**")
+            config_text = f"""
+            - Lookback Window: 60 days
+            - Batch Size: 32
+            - Max Epochs: 100
+            - Early Stopping Patience: 10 epochs
+            - Train/Val/Test Split: 70/15/15
+            """
+            st.markdown(config_text)
+    
+    except Exception as e:
+        st.error(f"❌ An error occurred: {e}")
+        logger.exception("Error in Streamlit app")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center'>
+    <p>Built with PyTorch, FastAPI, and Streamlit | Free Stack ⚡</p>
+</div>
+""", unsafe_allow_html=True)
