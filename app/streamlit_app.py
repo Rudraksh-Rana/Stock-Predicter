@@ -117,33 +117,103 @@ if predict_button or True:  # Always show if page loads
         
         st.markdown("---")
         
-        # Display recommendation box
+        # Display recommendation box — always show BOTH profit & loss scenarios
         st.markdown("### 🎯 Trading Recommendation")
-        
-        if recommendation == "BUY":
-            st.success(f"""
-            ### ✅ BUY RECOMMENDATION
-            **Expected Return:** {pnl_percentage:.2f}%
-            **Profit Per Share:** ${price_change:.2f}
-            **Entry Price:** ${current_price:.2f}
-            **Target Price:** ${predicted_price:.2f}
-            
-            The model predicts the price will go UP. Based on the prediction, buying at current price 
-            and selling at predicted price could yield a profit of ${price_change:.2f} per share ({pnl_percentage:.2f}%).
-            """)
-        else:
-            st.error(f"""
-            ### ❌ SELL RECOMMENDATION
-            **Expected Loss:** {pnl_percentage:.2f}%
-            **Loss Per Share:** ${price_change:.2f}
-            **Entry Price:** ${current_price:.2f}
-            **Target Price:** ${predicted_price:.2f}
-            
-            The model predicts the price will go DOWN. The predicted price is lower than current price.
-            Holding or buying at this point may result in a loss of ${abs(price_change):.2f} per share ({abs(pnl_percentage):.2f}%).
-            Consider selling or holding off buying.
-            """)
-        
+
+        rec_col1, rec_col2 = st.columns(2)
+
+        # ── Profit (BUY) scenario ─────────────────────────────────────────────
+        profit_per_share = abs(price_change) if price_change > 0 else abs(price_change)
+        profit_pct       = abs(pnl_percentage)
+        buy_target       = max(current_price, predicted_price)
+        loss_per_share   = abs(price_change)
+        loss_pct         = abs(pnl_percentage)
+        sell_target      = min(current_price, predicted_price)
+
+        with rec_col1:
+            if recommendation == "BUY":
+                st.success(f"""
+### ✅ BUY  ← **MODEL RECOMMENDS THIS**
+| Field | Value |
+|---|---|
+| **Signal** | Price predicted to go UP |
+| **Entry Price** | ${current_price:.2f} |
+| **Target Price** | ${buy_target:.2f} |
+| **Profit / Share** | +${profit_per_share:.2f} |
+| **Expected Return** | +{profit_pct:.2f}% |
+| **CI Range** | ${pred_data['confidence_interval'][0]:.2f} – ${pred_data['confidence_interval'][1]:.2f} |
+
+> Buy now and sell at predicted target to capture the upside.
+""")
+            else:
+                st.info(f"""
+### 📈 BUY  ← *Alternative / Contrarian*
+| Field | Value |
+|---|---|
+| **Signal** | Price predicted to go DOWN |
+| **Entry Price** | ${current_price:.2f} |
+| **Upside Target** | ${pred_data['confidence_interval'][1]:.2f} (CI upper) |
+| **Max Upside / Share** | +${pred_data['confidence_interval'][1] - current_price:.2f} |
+| **Max Upside %** | +{((pred_data['confidence_interval'][1] - current_price) / current_price * 100):.2f}% |
+| **Risk** | High — model predicts DOWN move |
+
+> Buying against the model signal is HIGH risk. Only for contrarian bets.
+""")
+
+        # ── Loss / Risk (SELL) scenario ───────────────────────────────────────
+        with rec_col2:
+            if recommendation == "SELL":
+                st.error(f"""
+### ❌ SELL  ← **MODEL RECOMMENDS THIS**
+| Field | Value |
+|---|---|
+| **Signal** | Price predicted to go DOWN |
+| **Entry Price** | ${current_price:.2f} |
+| **Predicted Price** | ${sell_target:.2f} |
+| **Loss / Share (if held)** | −${loss_per_share:.2f} |
+| **Expected Loss %** | −{loss_pct:.2f}% |
+| **CI Range** | ${pred_data['confidence_interval'][0]:.2f} – ${pred_data['confidence_interval'][1]:.2f} |
+
+> Sell or short now to avoid the predicted downside move.
+""")
+            else:
+                st.warning(f"""
+### ⚠️ SELL / RISK  ← *Downside Scenario*
+| Field | Value |
+|---|---|
+| **Signal** | Model says UP, but downside possible |
+| **Entry Price** | ${current_price:.2f} |
+| **Worst-Case Price** | ${pred_data['confidence_interval'][0]:.2f} (CI lower) |
+| **Max Loss / Share** | −${current_price - pred_data['confidence_interval'][0]:.2f} |
+| **Max Loss %** | −{((current_price - pred_data['confidence_interval'][0]) / current_price * 100):.2f}% |
+| **Risk** | Low — model predicts UP move |
+
+> Even in a BUY signal, track this downside risk for stop-loss planning.
+""")
+
+        # ── P&L summary bar ───────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📊 P&L Summary")
+        pnl_cols = st.columns(4)
+        with pnl_cols[0]:
+            st.metric("Recommendation", recommendation,
+                      delta="Model Signal", delta_color="off")
+        with pnl_cols[1]:
+            st.metric("Expected P&L / Share",
+                      f"{'+'if price_change>=0 else ''}{price_change:.2f}",
+                      delta=f"{'+' if pnl_percentage>=0 else ''}{pnl_percentage:.2f}%",
+                      delta_color="normal")
+        with pnl_cols[2]:
+            st.metric("Max Upside / Share",
+                      f"+${pred_data['confidence_interval'][1] - current_price:.2f}",
+                      delta=f"+{((pred_data['confidence_interval'][1]-current_price)/current_price*100):.2f}%",
+                      delta_color="normal")
+        with pnl_cols[3]:
+            st.metric("Max Downside / Share",
+                      f"-${current_price - pred_data['confidence_interval'][0]:.2f}",
+                      delta=f"-{((current_price-pred_data['confidence_interval'][0])/current_price*100):.2f}%",
+                      delta_color="inverse")
+
         st.markdown("---")
         
         # Display confidence interval details
