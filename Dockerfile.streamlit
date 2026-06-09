@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install only Streamlit-related dependencies (lighter image)
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    streamlit==1.33.0 \
+    httpx==0.27.0 \
+    plotly==5.18.0 \
+    pandas==2.2.1 \
+    numpy==1.26.4 \
+    python-dotenv==1.0.1
+
+# Copy only app code (not models/data to keep image lean)
+COPY app/ ./app/
+COPY .env.example .env.example
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app/streamlit_app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true"]
